@@ -119,3 +119,5 @@ pub(crate) fn menu_leading_slot(width: f32, content: impl IntoElement) -> gpui_k
 
 #[cfg(test)]
 mod components_tests;
+
+pub(crate) use editor::RetainedEditorState;

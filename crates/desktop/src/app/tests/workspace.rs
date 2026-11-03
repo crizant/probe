@@ -394,9 +394,7 @@ fn new_request_tabs_are_in_memory_and_editable(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestAppContext) {
     cx.update(Theme::init);
-    let window = cx.open_window(size(px(1180.0), px(780.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
+    let window = cx.open_window(size(px(1180.0), px(780.0)), ProbeApp::new);
     let fixture = bundled_fixture().canonicalize().unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     window
@@ -448,7 +446,8 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
                 .update(cx, |view, _, cx| {
                     let key = view.shell.active_tab().unwrap();
                     view.request_editor.set_section(key, section);
-                    view.request_section_scroll
+                    view.request_editor
+                        .scroll(key, section)
                         .set_offset(point(px(0.0), px(0.0)));
                     cx.notify();
                 })
@@ -480,13 +479,53 @@ fn request_editor_lists_scroll_when_the_pointer_is_over_a_field(cx: &mut TestApp
             });
             assert_eq!(
                 window
-                    .update(cx, |view, _, _| view.request_section_scroll.offset().y)
+                    .update(cx, |view, _, _| view
+                        .request_editor
+                        .scroll(view.shell.active_tab().unwrap(), section)
+                        .offset()
+                        .y)
                     .unwrap(),
                 px(-8.0),
                 "scroll wiring for {section:?}, value column: {value_column}"
             );
         }
     }
+    let (key, other) = window
+        .read_with(cx, |view, _| {
+            (
+                view.shell.active_tab().unwrap(),
+                view.loaded_workspace.as_ref().unwrap().requests()[0].key(),
+            )
+        })
+        .unwrap();
+    window
+        .update(cx, |view, _, cx| {
+            view.request_editor
+                .scroll(key, EditorSection::Headers)
+                .set_offset(point(px(0.0), px(-120.0)));
+            view.select_request(other, cx);
+            view.request_editor
+                .set_section(other, EditorSection::Headers);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let other_headers = view.request_editor.scroll(other, EditorSection::Headers);
+            assert_eq!(other_headers.offset().y, px(0.0));
+            view.select_request(key, cx);
+            view.request_editor.set_section(key, EditorSection::Headers);
+        })
+        .unwrap();
+    visual.run_until_parked();
+    window
+        .read_with(cx, |view, _| {
+            let headers = view.request_editor.scroll(key, EditorSection::Headers);
+            let path = view.request_editor.scroll(key, EditorSection::Path);
+            assert_eq!(headers.offset().y, px(-120.0));
+            assert_eq!(path.offset().y, px(-8.0));
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -3143,10 +3182,18 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
     cx: &mut TestAppContext,
 ) {
     cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
     let fixture = writable_bundled_fixture("filesystem-reload");
+    // Keep the GraphQL body unchanged on disk, so Use Disk must reset a
+    // rejected variables draft even though its model value never changed.
+    let source = fs::read_to_string(&fixture).unwrap();
+    fs::write(
+        &fixture,
+        source
+            .replacen("type: http", "type: graphql", 1)
+            .replacen("http:", "graphql:", 1),
+    )
+    .unwrap();
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     let selector = workspace.requests()[0].selector().to_owned();
     let key = workspace.requests()[0].key();
@@ -3154,6 +3201,9 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
         .update(cx, |view, _, cx| {
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
+            view.select_request(key, cx);
+            view.request_editor
+                .set_section(key, EditorSection::GraphqlVariables);
             view.edit_request(
                 key,
                 |request| request.url = Some("https://local.example/draft".to_owned()),
@@ -3162,6 +3212,18 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
         })
         .unwrap();
 
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            let editor = view
+                .request_editor
+                .editor(key, "graphql-variables")
+                .editor(cx);
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+        })
+        .unwrap();
+    cx.simulate_input(window.into(), "invalid");
+    cx.run_until_parked();
     let source = fs::read_to_string(&fixture).unwrap();
     fs::write(&fixture, source.replacen("method: GET", "method: PATCH", 1)).unwrap();
     let fresh = probe_opencollection::load_workspace(&fixture).unwrap();
@@ -3194,19 +3256,30 @@ fn filesystem_reload_merges_against_disk_baselines_and_use_disk_discards_edits(
                 view.application_dialog,
                 Some(ApplicationDialog::FilesystemConflict { .. })
             ));
+            let active = view.shell.active_tab().unwrap();
+            let variables = view
+                .request_editor
+                .editor(active, "graphql-variables")
+                .editor(cx);
+            assert_eq!(variables.read(cx).value(), "invalid");
             view.handle_application_dialog_action(ApplicationDialogAction::UseDisk, window, cx);
         })
         .unwrap();
     cx.run_until_parked();
 
     window
-        .update(cx, |view, _, _| {
+        .update(cx, |view, _, cx| {
             let loaded = view.loaded_workspace.as_ref().unwrap();
             let key = loaded.request_key(&selector).unwrap();
             let request = loaded.workspace().request(key).unwrap();
             assert_eq!(request.method.as_deref(), Some("PUT"));
             assert_eq!(request.url.as_deref(), Some("https://api.example.com/pets"));
             assert!(!view.persistence.is_dirty(key, request));
+            let restored = view
+                .request_editor
+                .editor(key, "graphql-variables")
+                .editor(cx);
+            assert_eq!(restored.read(cx).value(), "");
         })
         .unwrap();
     fs::remove_file(fixture).unwrap();
@@ -3936,13 +4009,11 @@ fn restored_active_tab_highlights_matching_sidebar_request(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
-fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps(
+fn workspace_reload_preserves_request_section_scroll_after_multiple_remaps(
     cx: &mut TestAppContext,
 ) {
     cx.update(Theme::init);
-    let window = cx.open_window(size(px(900.0), px(640.0)), |window, cx| {
-        ProbeApp::new(window, cx)
-    });
+    let window = cx.open_window(size(px(900.0), px(640.0)), ProbeApp::new);
     let fixture = writable_bundled_fixture("reload-scroll-owner-multi");
     let workspace = probe_opencollection::load_workspace(&fixture).unwrap();
     window
@@ -3950,14 +4021,10 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
             view.session_store = None;
             view.set_workspace(fixture.clone(), workspace);
 
-            let old = view.loaded_workspace.as_ref().unwrap();
-            let old_key = old.requests()[0].key();
+            let old_key = view.loaded_workspace.as_ref().unwrap().requests()[0].key();
             view.select_request(old_key, cx);
             view.request_editor
                 .set_section(old_key, EditorSection::Headers);
-
-            view.request_section_scroll_owner
-                .set(Some((old_key, EditorSection::Headers)));
         })
         .unwrap();
 
@@ -3965,13 +4032,18 @@ fn workspace_reload_preserves_request_section_scroll_owner_after_multiple_remaps
         window
             .update(cx, |view, _, _| {
                 let old_key = view.shell.active_tab().unwrap();
+                view.request_editor
+                    .scroll(old_key, EditorSection::Headers)
+                    .set_offset(point(px(0.0), px(-120.0)));
                 let new_key = reload_unchanged_fixture(view, &fixture)[&old_key];
 
-                let scroll_owner = view.request_section_scroll_owner.get();
                 assert_eq!(
-                    scroll_owner,
-                    Some((new_key, EditorSection::Headers)),
-                    "scroll owner should be remapped after reload {iteration}"
+                    view.request_editor
+                        .scroll(new_key, EditorSection::Headers)
+                        .offset()
+                        .y,
+                    px(-120.0),
+                    "scroll position should be remapped after reload {iteration}"
                 );
             })
             .unwrap();

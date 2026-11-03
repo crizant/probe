@@ -105,6 +105,7 @@ impl ProbeApp {
                     .min_h(px(0.0))
                     .child(components::body_text_input(
                         theme,
+                        self.request_editor.editor(key, "websocket-message"),
                         ("websocket-message", key.slot()),
                         message.data.clone(),
                         match kind {

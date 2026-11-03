@@ -980,7 +980,7 @@ impl ProbeApp {
                     crate::app::documentation::documentation_text(
                         dialog.draft().description.as_ref(),
                     ),
-                    description_id,
+                    (description_id, None),
                     "environment-manager-description",
                     false,
                     move |value, _, cx| {

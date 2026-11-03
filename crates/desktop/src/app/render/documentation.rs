@@ -6,6 +6,7 @@ pub(super) fn documentation_sections(
     first_label: &'static str,
     values: [Option<&str>; 2],
     ids: [gpui_kit::ElementId; 2],
+    editors: [components::RetainedEditorState; 2],
     on_change: impl Fn(bool, gpui_kit::SharedString, &mut Window, &mut gpui_kit::App) + 'static,
 ) -> gpui_kit::Div {
     let on_change = Rc::new(on_change);
@@ -15,10 +16,10 @@ pub(super) fn documentation_sections(
         .flex()
         .flex_col()
         .gap(px(theme.metrics.spacing_2));
-    for (index, ((label, text), id)) in [first_label, "Documentation"]
+    for (index, ((label, text), (id, editor))) in [first_label, "Documentation"]
         .into_iter()
         .zip(values)
-        .zip(ids)
+        .zip(ids.into_iter().zip(editors))
         .enumerate()
     {
         let on_change = on_change.clone();
@@ -27,7 +28,7 @@ pub(super) fn documentation_sections(
             theme,
             label,
             text,
-            id,
+            (id, Some(editor)),
             if grow {
                 "documentation-docs-editor"
             } else {
@@ -47,11 +48,12 @@ pub(in crate::app) fn documentation_text_field(
     theme: Theme,
     label: &'static str,
     text: Option<&str>,
-    id: gpui_kit::ElementId,
+    editor: (gpui_kit::ElementId, Option<components::RetainedEditorState>),
     container_id: &'static str,
     grow: bool,
     on_change: impl Fn(gpui_kit::SharedString, &mut Window, &mut gpui_kit::App) + 'static,
 ) -> gpui_kit::Div {
+    let (id, editor) = editor;
     div()
         .min_h(px(0.0))
         .when(!grow, |section| section.flex_none())
@@ -77,6 +79,7 @@ pub(in crate::app) fn documentation_text_field(
                 .w_full()
                 .child(components::documentation_text_input(
                     theme,
+                    editor,
                     id,
                     text.unwrap_or_default().to_owned(),
                     label,
@@ -181,6 +184,11 @@ impl ProbeApp {
                 documentation_text(content.docs.as_ref()),
             ],
             ids,
+            self.overview_editors
+                .borrow_mut()
+                .entry(target.clone())
+                .or_default()
+                .clone(),
             move |docs, value, _, cx| {
                 let _ = edit_view.update(cx, |view, cx| {
                     view.edit_overview(edit_target.clone(), docs, value.to_string(), cx)

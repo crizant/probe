@@ -696,3 +696,29 @@ fn results_for_replaced_or_closed_documents_are_ignored_after_a_reload() {
     assert!(viewer.document(old_key).is_none());
     assert!(viewer.document(new_key).is_none());
 }
+
+#[test]
+fn inspector_scroll_is_per_request_survives_remaps_and_resets_with_response() {
+    use gpui_kit::{point, px};
+    use std::collections::BTreeMap;
+    let first = request_key();
+    let second = replacement_request_key();
+    let document = prepare_document(&response(b"body", "text/plain"), 1).0;
+    let mut viewer = super::ResponseViewerState::default();
+    viewer.insert(first, document.clone());
+    viewer.insert(second, document.clone());
+    let first_scroll = viewer.inspector_scroll(first);
+    let second_scroll = viewer.inspector_scroll(second);
+    first_scroll
+        .0
+        .borrow()
+        .base_handle
+        .set_offset(point(px(0.0), px(-120.0)));
+    assert_eq!(second_scroll.0.borrow().base_handle.offset().y, px(0.0));
+    viewer.remap_requests(&BTreeMap::from([(first, second)]));
+    let remapped = viewer.inspector_scroll(second);
+    assert_eq!(remapped.0.borrow().base_handle.offset().y, px(-120.0));
+    viewer.insert(second, document);
+    let replacement = viewer.inspector_scroll(second);
+    assert_eq!(replacement.0.borrow().base_handle.offset().y, px(0.0));
+}

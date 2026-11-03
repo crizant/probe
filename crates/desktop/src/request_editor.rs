@@ -1,5 +1,5 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap},
 };
 
@@ -107,7 +107,7 @@ impl AssertionEdit {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum EditorSection {
     #[default]
     Path,
@@ -305,12 +305,60 @@ const fn hex(byte: u8) -> Option<u8> {
 #[derive(Debug, Default)]
 pub(crate) struct RequestEditorState {
     sections: HashMap<RequestKey, EditorSection>,
+    editors: RefCell<BTreeMap<(RequestKey, &'static str), crate::components::RetainedEditorState>>,
+    scrolls: RefCell<BTreeMap<(RequestKey, EditorSection), gpui_kit::ScrollHandle>>,
     assertion_focus: Cell<Option<(RequestKey, usize)>>,
     body_drafts: BTreeMap<(RequestKey, BodyEditorKind), RequestBody>,
 }
 
 impl RequestEditorState {
+    pub(crate) fn editor(
+        &self,
+        key: RequestKey,
+        slot: &'static str,
+    ) -> crate::components::RetainedEditorState {
+        self.editors
+            .borrow_mut()
+            .entry((key, slot))
+            .or_default()
+            .clone()
+    }
+
+    pub(crate) fn invalidate_editors(&mut self, key: RequestKey) {
+        self.editors.get_mut().retain(|(owner, _), _| *owner != key);
+    }
+
+    pub(crate) fn invalidate_changed_editors(
+        &mut self,
+        key: RequestKey,
+        previous: &Request,
+        current: &Request,
+    ) {
+        if (previous.kind.is_graphql() || current.kind.is_graphql())
+            && previous.kind != current.kind
+        {
+            for slot in ["graphql-query", "graphql-variables", "graphql-extensions"] {
+                self.editors.get_mut().remove(&(key, slot));
+            }
+        }
+        if (previous.kind.is_websocket() || current.kind.is_websocket())
+            && previous.kind != current.kind
+        {
+            self.editors.get_mut().remove(&(key, "websocket-message"));
+        }
+    }
+
+    pub(crate) fn scroll(&self, key: RequestKey, section: EditorSection) -> gpui_kit::ScrollHandle {
+        self.scrolls
+            .borrow_mut()
+            .entry((key, section))
+            .or_default()
+            .clone()
+    }
+
     pub(crate) fn clear(&mut self) {
+        self.editors.get_mut().clear();
+        self.scrolls.get_mut().clear();
         self.sections.clear();
         self.assertion_focus.set(None);
         self.body_drafts.clear();
@@ -340,6 +388,8 @@ impl RequestEditorState {
     }
 
     pub(crate) fn remove(&mut self, key: RequestKey) {
+        self.invalidate_editors(key);
+        self.scrolls.get_mut().retain(|(owner, _), _| *owner != key);
         self.sections.remove(&key);
         if self
             .assertion_focus
@@ -369,6 +419,16 @@ impl RequestEditorState {
     }
 
     pub(crate) fn remap_requests(&mut self, keys: &BTreeMap<RequestKey, RequestKey>) {
+        *self.editors.get_mut() = std::mem::take(self.editors.get_mut())
+            .into_iter()
+            .filter_map(|((key, slot), editor)| keys.get(&key).map(|new| ((*new, slot), editor)))
+            .collect();
+        *self.scrolls.get_mut() = std::mem::take(self.scrolls.get_mut())
+            .into_iter()
+            .filter_map(|((key, section), scroll)| {
+                keys.get(&key).map(|new| ((*new, section), scroll))
+            })
+            .collect();
         self.assertion_focus.set(
             self.assertion_focus
                 .get()

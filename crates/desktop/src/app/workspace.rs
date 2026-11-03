@@ -853,6 +853,13 @@ impl ProbeApp {
                                 .collect::<Vec<_>>();
                             let result = reconcile(&clean_local, workspace, &BTreeMap::new());
                             if let ReconcileResult::Applied(reconciled) = result {
+                                // Use Disk also discards rejected drafts that never reached
+                                // the model. Detached requests are not replaced by disk.
+                                if let Some(loaded) = &view.loaded_workspace {
+                                    for request in loaded.requests() {
+                                        view.request_editor.invalidate_editors(request.key());
+                                    }
+                                }
                                 view.apply_reconciled_workspace(*reconciled, cx);
                                 view.pending_environment_saves.clear();
                                 view.failed_environment_saves.clear();
@@ -902,6 +909,7 @@ impl ProbeApp {
     }
 
     pub(super) fn reset_collection_ui(&mut self) {
+        self.overview_editors.get_mut().clear();
         self.overview_drafts.clear();
         self.pending_documentation_saves.clear();
         self.documentation_save_task = None;
@@ -1046,6 +1054,18 @@ impl ProbeApp {
             let new_key = workspace.add_detached_request(request);
             remaps.insert(old_key, new_key);
         }
+        // Changed protocol bodies may select a different variant with identical
+        // displayed text. Drop only their editors before remapping.
+        for (previous_key, current_key) in &remaps {
+            if let Some((previous, current)) = old
+                .workspace()
+                .request(*previous_key)
+                .zip(workspace.workspace().request(*current_key))
+            {
+                self.request_editor
+                    .invalidate_changed_editors(*previous_key, previous, current);
+            }
+        }
         self.detached_requests.remap(&remaps);
         self.persistence.reset(baselines);
         self.loaded_workspace = Some(workspace);
@@ -1056,14 +1076,6 @@ impl ProbeApp {
         self.websocket.remap_requests(&remaps);
         self.response_viewer.remap_requests(&remaps);
         self.request_editor.remap_requests(&remaps);
-        if let Some((old_key, section)) = self.request_section_scroll_owner.get() {
-            self.request_section_scroll_owner.set(
-                remaps
-                    .get(&old_key)
-                    .copied()
-                    .map(|new_key| (new_key, section)),
-            );
-        }
         self.send_and_save_targets.retain(|_, key| {
             remaps.get(key).is_some_and(|new_key| {
                 *key = *new_key;
@@ -1191,6 +1203,7 @@ impl ProbeApp {
         let targets: BTreeMap<_, _> = self
             .overview_drafts
             .keys()
+            .chain(self.overview_editors.get_mut().keys())
             .chain(self.pending_documentation_saves.iter())
             .chain(match self.pending_close.as_ref() {
                 Some(PendingClose::Overview(target)) => Some(target),
@@ -1209,6 +1222,14 @@ impl ProbeApp {
                     _ => target.clone(),
                 };
                 (target.clone(), mapped)
+            })
+            .collect();
+        *self.overview_editors.get_mut() = std::mem::take(self.overview_editors.get_mut())
+            .into_iter()
+            .filter_map(|(target, editors)| {
+                let mapped = targets.get(&target)?;
+                (!matches!(mapped, OverviewTarget::DetachedFolder(_)))
+                    .then(|| (mapped.clone(), editors))
             })
             .collect();
         self.overview_drafts = std::mem::take(&mut self.overview_drafts)

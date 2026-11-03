@@ -1400,6 +1400,7 @@ fn writable_structure_fixture(suffix: &str) -> PathBuf {
 
 mod assertions;
 mod curl_import;
+mod editor_state;
 mod environments;
 mod graphql;
 mod interactions;

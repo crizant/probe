@@ -743,6 +743,7 @@ impl Render for EditableEditorHarness {
             .flex_col()
             .child(
                 ProbeEditor {
+                    retained_state: None,
                     theme,
                     id: "editable-editor-regression".into(),
                     value: self.value.clone(),
@@ -991,6 +992,7 @@ impl Render for TextContextMenuHarness {
                 input.into_any_element()
             }
             TextContextMenuHarnessKind::BodyEditor => ProbeEditor {
+                retained_state: None,
                 theme,
                 id: "context-body-editor".into(),
                 value: "{\"ok\":true}".into(),
@@ -1013,6 +1015,7 @@ impl Render for TextContextMenuHarness {
             }
             .into_any_element(),
             TextContextMenuHarnessKind::ResponseEditor => ProbeEditor {
+                retained_state: None,
                 theme,
                 id: "context-response-editor".into(),
                 value: "{\"ok\":true}".into(),

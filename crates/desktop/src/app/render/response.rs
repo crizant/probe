@@ -896,7 +896,7 @@ impl ProbeApp {
 
         let list = match self.response_viewer.tab(key) {
             ResponseViewerTab::Assertions => self.render_assertion_results(key, theme, cx),
-            ResponseViewerTab::Headers => self.render_response_headers(theme, document, cx),
+            ResponseViewerTab::Headers => self.render_response_headers(theme, key, document, cx),
             ResponseViewerTab::Inspect => self.render_response_inspector(theme, key, document, cx),
             ResponseViewerTab::Pretty if document.is_image() => {
                 self.render_response_image(theme, key, document)
@@ -1076,7 +1076,14 @@ impl ProbeApp {
             .min_h(px(0.0))
             .child(components::response_body_input(
                 theme,
-                "response-body-editor",
+                self.response_viewer
+                    .editor(key, self.response_viewer.tab(key)),
+                format!(
+                    "response-body-editor-{}-{:?}-{:?}",
+                    document.generation,
+                    self.response_viewer.tab(key),
+                    self.response_viewer.raw_view(key)
+                ),
                 text,
                 components::ResponseBodyInputOptions::new(
                     if self.response_viewer.tab(key) == ResponseViewerTab::Pretty {
@@ -1160,6 +1167,7 @@ impl ProbeApp {
     pub(super) fn render_response_headers(
         &self,
         theme: Theme,
+        key: probe_core::RequestKey,
         document: &PreparedDocument,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
@@ -1174,7 +1182,8 @@ impl ProbeApp {
             .min_h(px(0.0))
             .child(components::response_headers_input(
                 theme,
-                "response-headers-editor",
+                self.response_viewer.editor(key, ResponseViewerTab::Headers),
+                format!("response-headers-editor-{}", document.generation),
                 &document.headers,
                 move |range, cx| {
                     #[cfg(test)]
@@ -1203,7 +1212,8 @@ impl ProbeApp {
         if let Some(selection) = self.pending_inspector_reveal.take()
             && let Some(index) = inspect_row_index(&rows, selection)
         {
-            self.inspector_scroll
+            self.response_viewer
+                .inspector_scroll(key)
                 .scroll_to_item(index, ScrollStrategy::Nearest);
         }
         let selected = self.response_viewer.inspection_selection(key);
@@ -1234,7 +1244,7 @@ impl ProbeApp {
             })
         })
         .size_full()
-        .track_scroll(&self.inspector_scroll);
+        .track_scroll(self.response_viewer.inspector_scroll(key));
 
         if row_count == 0 && !document.inspection_pending {
             return Self::inspect_tab_content_boundary(
@@ -1299,7 +1309,8 @@ impl ProbeApp {
                                         .size_full()
                                         .child(components::response_inspector_input(
                                             theme,
-                                            "response-inspector-editor",
+                                            self.response_viewer.editor(key, ResponseViewerTab::Inspect),
+                                            format!("response-inspector-editor-{}", document.generation),
                                             detail,
                                             move |range, cx| {
                                                 #[cfg(test)]

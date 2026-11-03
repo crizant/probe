@@ -361,6 +361,7 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         .expect("fixture should exist");
     let workspace = probe_opencollection::load_workspace(&fixture).expect("fixture should load");
     let request_key = workspace.requests()[0].key();
+    let other_request = workspace.requests()[1].key();
     window
         .update(cx, |view, _, cx| {
             view.session_store = None;
@@ -368,7 +369,11 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
             view.select_request(request_key, cx);
             let (cancellation, _) = tokio::sync::oneshot::channel();
             let generation = view.execution.begin(request_key, cancellation);
-            let body = br#"{"createdAt":1787482800,"ok":true}"#.to_vec();
+            let body = format!(
+                r#"{{"createdAt":1787482800,"ok":true,"rows":{:?}}}"#,
+                (0..200).collect::<Vec<_>>()
+            )
+            .into_bytes();
             view.complete_execution(
                 request_key,
                 generation,
@@ -477,10 +482,57 @@ fn completed_response_renders_pretty_raw_headers_and_search(cx: &mut TestAppCont
         .expect("test window should remain open");
     cx.simulate_keystrokes(window.into(), "o k");
     cx.run_until_parked();
+    let editor = window
+        .update(cx, |view, _, cx| {
+            let editor = view
+                .response_viewer
+                .editor(request_key, ResponseViewerTab::Pretty)
+                .editor(cx);
+            editor.update(cx, |editor, cx| {
+                editor.set_scroll_offset(gpui_kit::point(px(0.0), px(-400.0)), cx)
+            });
+            editor
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let offset = editor.read_with(cx, |editor, _| editor.scroll_offset());
+    assert!(offset.y < px(0.0));
+    for response_tab in [ResponseViewerTab::Raw, ResponseViewerTab::Headers] {
+        window
+            .update(cx, |view, _, cx| view.set_response_tab(response_tab, cx))
+            .unwrap();
+        cx.run_until_parked();
+        {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("editor-search-card").is_none());
+        }
+    }
+    window
+        .update(cx, |view, _, cx| view.select_request(other_request, cx))
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(request_key, cx);
+            view.set_response_tab(ResponseViewerTab::Pretty, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            let restored = view
+                .response_viewer
+                .editor(request_key, ResponseViewerTab::Pretty)
+                .editor(cx);
+            assert_eq!(restored.read(cx).scroll_offset(), offset);
+            assert_eq!(restored.read(cx).search_session().query, "ok");
+        })
+        .unwrap();
+    // Returning to a tab preserves its open search without stealing focus.
     {
         let mut visual = VisualTestContext::from_window(window.into(), cx);
-        assert!(visual.debug_bounds("editor-search-card").is_some());
-        assert!(visual.debug_bounds("response-body").is_some());
+        let input = visual.debug_bounds("editor-search-input").unwrap();
+        visual.simulate_click(input.center(), Modifiers::default());
     }
     cx.simulate_keystrokes(window.into(), "escape");
     cx.run_until_parked();

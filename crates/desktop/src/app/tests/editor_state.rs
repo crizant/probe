@@ -1,0 +1,450 @@
+use super::*;
+use gpui_kit::{Entity, WindowHandle, base::input::EditorState};
+use probe_core::{
+    Body, GraphqlBody, GraphqlBodyVariant, GraphqlOperation, RawBody, RawBodyKind, RequestBody,
+    RequestKind,
+};
+
+fn select_editor(
+    window: WindowHandle<ProbeApp>,
+    key: probe_core::RequestKey,
+    section: EditorSection,
+    slot: &'static str,
+    cx: &mut TestAppContext,
+) -> Entity<EditorState> {
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(key, cx);
+            view.request_editor.set_section(key, section);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, window, cx| {
+            let editor = view.request_editor.editor(key, slot).editor(cx);
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+            editor
+        })
+        .unwrap()
+}
+
+fn editor_workspace(
+    cx: &mut TestAppContext,
+) -> (WindowHandle<ProbeApp>, [probe_core::RequestKey; 3]) {
+    cx.update(Theme::init);
+    cx.update(bind_platform_hotkeys);
+    let window = cx.open_window(size(px(1180.0), px(780.0)), ProbeApp::new);
+    let fixture = bundled_fixture();
+    let mut workspace = probe_opencollection::load_workspace(&fixture).unwrap();
+    let http = workspace.requests()[0].key();
+    let text = "needle row\n".repeat(100);
+    let request = workspace.request_mut(http).unwrap();
+    request.kind = RequestKind::Http {
+        body: Some(RequestBody::Single(Body::Raw(RawBody {
+            kind: RawBodyKind::Text,
+            data: text.clone(),
+        }))),
+    };
+    request.docs = Some(text.clone());
+    let object = serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(
+        serde_json::json!({"rows": vec!["needle"; 100]}),
+    )
+    .unwrap();
+    let operation = GraphqlOperation {
+        query: Some(text.clone()),
+        variables: Some(object.clone()),
+        extensions: Some(object),
+        ..Default::default()
+    };
+    let graphql = workspace.requests()[1].key();
+    workspace.request_mut(graphql).unwrap().kind = RequestKind::Graphql {
+        body: Some(GraphqlBody::Variants(
+            [true, false]
+                .map(|selected| GraphqlBodyVariant {
+                    title: "Same title".into(),
+                    selected,
+                    body: operation.clone(),
+                })
+                .into(),
+        )),
+    };
+    let websocket = workspace.add_detached_request(Request {
+        kind: RequestKind::WebSocket {
+            message: Some(probe_core::WebSocketMessageSet::Single(
+                probe_core::WebSocketMessage {
+                    kind: probe_core::WebSocketMessageKind::Text,
+                    data: text.clone(),
+                },
+            )),
+        },
+        ..Default::default()
+    });
+    window
+        .update(cx, |view, _, cx| {
+            view.session_store = None;
+            view.set_workspace(fixture, workspace);
+            let (cancel, _) = oneshot::channel();
+            view.websocket.begin(websocket, cancel);
+            let session = view.websocket.sessions.get_mut(&websocket).unwrap();
+            session.state = crate::websocket::ConnectionState::Connected;
+            session.draft = text;
+            view.select_request(http, cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    (window, [http, graphql, websocket])
+}
+
+#[gpui_kit::test]
+fn request_editors_keep_sessions_across_sections_and_requests(cx: &mut TestAppContext) {
+    let (window, [http, graphql, websocket]) = editor_workspace(cx);
+    for (key, section, slot) in [
+        (http, EditorSection::Body, "body-text"),
+        (http, EditorSection::Docs, "request-docs"),
+        (graphql, EditorSection::GraphqlQuery, "graphql-query"),
+        (
+            graphql,
+            EditorSection::GraphqlVariables,
+            "graphql-variables",
+        ),
+        (
+            graphql,
+            EditorSection::GraphqlExtensions,
+            "graphql-extensions",
+        ),
+        (
+            websocket,
+            EditorSection::WebSocketMessage,
+            "websocket-message",
+        ),
+        (
+            websocket,
+            EditorSection::WebSocketMessage,
+            "websocket-composer",
+        ),
+    ] {
+        let editor = select_editor(window, key, section, slot, cx);
+        // Exercise shared editor behavior once; other rows check their wiring.
+        let http_body = key == http && section == EditorSection::Body;
+        let original = editor.read_with(cx, |editor, _| editor.value());
+        if http_body {
+            cx.simulate_input(window.into(), "edited");
+            cx.simulate_keystrokes(window.into(), find_shortcut());
+            cx.simulate_input(window.into(), "needle");
+            cx.run_until_parked();
+            editor.update(cx, |editor, cx| editor.next_search_match(cx));
+        }
+        let selection = if http_body { 110..116 } else { 0..6 };
+        editor.update(cx, |editor, cx| {
+            editor.set_selected_range(selection.clone(), cx)
+        });
+        cx.run_until_parked();
+        if http_body {
+            editor.update(cx, |editor, cx| {
+                editor.set_scroll_offset(point(px(0.0), px(-100.0)), cx)
+            });
+            cx.run_until_parked();
+        }
+        let (offset, match_index) = editor.read_with(cx, |editor, _| {
+            (
+                editor.scroll_offset(),
+                editor.search_session().matcher.current_match_index(),
+            )
+        });
+        // Unmount the section, then leave the request. Each editor must retain
+        // its session through both transitions; restore it only once.
+        window
+            .update(cx, |view, _, cx| {
+                view.request_editor.set_section(key, EditorSection::Headers);
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, cx| {
+                view.select_request(if key == http { graphql } else { http }, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let restored = select_editor(window, key, section, slot, cx);
+        assert_eq!(
+            restored.read_with(cx, |state, _| state.selected_range()),
+            selection,
+            "{slot}"
+        );
+        if http_body {
+            cx.run_until_parked();
+            restored.read_with(cx, |editor, _| {
+                assert!(offset.y < px(0.0));
+                assert!(match_index > 0);
+                assert_eq!(editor.scroll_offset(), offset);
+                assert!(editor.search_session().is_active());
+                assert_eq!(editor.search_session().query, "needle");
+                assert_eq!(
+                    editor.search_session().matcher.current_match_index(),
+                    match_index
+                );
+            });
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("editor-search-card").is_some());
+            cx.simulate_keystrokes(window.into(), "escape");
+            window
+                .update(cx, |_, window, cx| {
+                    window.dispatch_action(Box::new(gpui_kit::base::input::Undo), cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(restored.read_with(cx, |editor, _| editor.value()), original);
+        }
+    }
+    let editor = select_editor(window, http, EditorSection::Body, "body-text", cx);
+    let weak = editor.downgrade();
+    drop(editor);
+    window
+        .update(cx, |view, _, cx| {
+            view.remove_open_tab(crate::shell::OpenTab::Request(http));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        weak.upgrade().is_none(),
+        "closing the tab releases its native editor"
+    );
+}
+
+#[gpui_kit::test]
+fn overview_editor_keeps_session_until_closed(cx: &mut TestAppContext) {
+    let (window, [request, ..]) = editor_workspace(cx);
+    let overview = crate::shell::OverviewTab::Collection;
+    window
+        .update(cx, |view, _, cx| {
+            view.select_open_tab(crate::shell::OpenTab::Overview(overview), cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    let target = super::super::documentation::OverviewTarget::Collection;
+    let editor = window
+        .update(cx, |view, window, cx| {
+            let editor = view.overview_editors.borrow()[&target][1].editor(cx);
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+            editor
+        })
+        .unwrap();
+    cx.simulate_input(window.into(), "additional documentation");
+    cx.run_until_parked();
+    let selection = editor.read_with(cx, |editor, _| editor.selected_range());
+    window
+        .update(cx, |view, _, cx| view.select_request(request, cx))
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .update(cx, |view, _, cx| {
+            view.select_open_tab(crate::shell::OpenTab::Overview(overview), cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    window
+        .read_with(cx, |view, cx| {
+            let restored = view.overview_editors.borrow()[&target][1].editor(cx);
+            assert_eq!(restored, editor);
+            assert_eq!(restored.read(cx).selected_range(), selection);
+        })
+        .unwrap();
+    window
+        .update(cx, |view, _, _| {
+            view.remove_open_tab(crate::shell::OpenTab::Overview(overview));
+            assert!(!view.overview_editors.borrow().contains_key(&target));
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn graphql_reload_keeps_unchanged_sessions_but_resets_changed_operations(cx: &mut TestAppContext) {
+    let (window, [_, key, _]) = editor_workspace(cx);
+    let fixture = bundled_fixture();
+    let docs = select_editor(window, key, EditorSection::Docs, "request-description", cx);
+    cx.simulate_input(window.into(), "documentation");
+    cx.run_until_parked();
+    let docs_selection = docs.read_with(cx, |editor, _| editor.selected_range());
+    let mut editors = Vec::new();
+    for (section, slot) in [
+        (EditorSection::GraphqlQuery, "graphql-query"),
+        (EditorSection::GraphqlVariables, "graphql-variables"),
+        (EditorSection::GraphqlExtensions, "graphql-extensions"),
+    ] {
+        let editor = select_editor(window, key, section, slot, cx);
+        if section != EditorSection::GraphqlQuery {
+            editor.update(cx, |editor, cx| {
+                editor.set_selected_range(0..editor.value().len(), cx)
+            });
+        }
+        cx.simulate_input(
+            window.into(),
+            if section == EditorSection::GraphqlQuery {
+                "edited"
+            } else {
+                "invalid"
+            },
+        );
+        cx.run_until_parked();
+        editors.push((section, slot, editor));
+    }
+    let expected_query = editors[0].2.read_with(cx, |editor, _| editor.value());
+    for changed in [false, true] {
+        let key = window
+            .update(cx, |view, _, cx| {
+                let mut fresh = probe_opencollection::load_workspace(&fixture).unwrap();
+                let current = view.loaded_workspace.as_ref().unwrap();
+                let mut request = current
+                    .workspace()
+                    .request(current.requests()[1].key())
+                    .unwrap()
+                    .clone();
+                if changed
+                    && let RequestKind::Graphql {
+                        body: Some(GraphqlBody::Variants(variants)),
+                    } = &mut request.kind
+                {
+                    // The new operation has identical text and a duplicate title.
+                    variants[1].body = variants[0].body.clone();
+                    variants[0].selected = false;
+                    variants[1].selected = true;
+                }
+                let key = fresh.requests()[1].key();
+                *fresh.request_mut(key).unwrap() = request;
+                view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
+                key
+            })
+            .unwrap();
+        assert_eq!(
+            select_editor(window, key, EditorSection::Docs, "request-description", cx),
+            docs
+        );
+        assert_eq!(
+            docs.read_with(cx, |editor, _| editor.selected_range()),
+            docs_selection
+        );
+        for (section, slot, _) in &editors {
+            let restored = select_editor(window, key, *section, slot, cx);
+            if *section == EditorSection::GraphqlQuery {
+                window
+                    .update(cx, |_, window, cx| {
+                        window.dispatch_action(Box::new(gpui_kit::base::input::Undo), cx);
+                    })
+                    .unwrap();
+                cx.run_until_parked();
+                if !changed {
+                    assert_ne!(
+                        restored.read_with(cx, |editor, _| editor.value()),
+                        expected_query
+                    );
+                    window
+                        .update(cx, |_, window, cx| {
+                            window.dispatch_action(Box::new(gpui_kit::base::input::Redo), cx);
+                        })
+                        .unwrap();
+                    cx.run_until_parked();
+                }
+                assert_eq!(
+                    restored.read_with(cx, |editor, _| editor.value()),
+                    expected_query
+                );
+            } else {
+                assert_eq!(
+                    restored.read_with(cx, |editor, _| editor.value()) == "invalid",
+                    !changed,
+                    "{slot}"
+                );
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn websocket_variant_reload_resets_message_undo_but_keeps_composer(cx: &mut TestAppContext) {
+    use probe_core::{
+        WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet, WebSocketMessageVariant,
+    };
+    let (window, [key, ..]) = editor_workspace(cx);
+    let section = EditorSection::WebSocketMessage;
+    window
+        .update(cx, |view, _, _| {
+            let message = WebSocketMessage {
+                kind: WebSocketMessageKind::Text,
+                data: "message".into(),
+            };
+            let loaded = view.loaded_workspace.as_mut().unwrap();
+            loaded.request_mut(key).unwrap().kind = RequestKind::WebSocket {
+                message: Some(WebSocketMessageSet::Variants(
+                    [true, false]
+                        .map(|selected| WebSocketMessageVariant {
+                            title: "Same title".into(),
+                            selected,
+                            message: message.clone(),
+                        })
+                        .into(),
+                )),
+            };
+            let (cancel, _) = oneshot::channel();
+            view.websocket.begin(key, cancel);
+            let session = view.websocket.sessions.get_mut(&key).unwrap();
+            session.state = crate::websocket::ConnectionState::Connected;
+            session.draft = "live draft".into();
+        })
+        .unwrap();
+    let composer = select_editor(window, key, section, "websocket-composer", cx);
+    let message = select_editor(window, key, section, "websocket-message", cx);
+    cx.simulate_input(window.into(), "edited");
+    cx.run_until_parked();
+    let expected = message.read_with(cx, |editor, _| editor.value());
+    let key = window
+        .update(cx, |view, _, cx| {
+            let mut fresh = probe_opencollection::load_workspace(bundled_fixture()).unwrap();
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let mut request = loaded.workspace().request(key).unwrap().clone();
+            let RequestKind::WebSocket {
+                message: Some(WebSocketMessageSet::Variants(variants)),
+            } = &mut request.kind
+            else {
+                panic!("expected configured message variants");
+            };
+            // Switch variants without changing the displayed text or title.
+            variants[1].message = variants[0].message.clone();
+            variants[0].selected = false;
+            variants[1].selected = true;
+            let key = fresh.requests()[0].key();
+            *fresh.request_mut(key).unwrap() = request;
+            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
+            key
+        })
+        .unwrap();
+    assert_eq!(
+        select_editor(window, key, section, "websocket-composer", cx),
+        composer
+    );
+    assert_eq!(
+        composer.read_with(cx, |editor, _| editor.value()),
+        "live draft"
+    );
+    let restored = select_editor(window, key, section, "websocket-message", cx);
+    window
+        .update(cx, |_, window, cx| {
+            window.dispatch_action(Box::new(gpui_kit::base::input::Undo), cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(restored.read_with(cx, |editor, _| editor.value()), expected);
+    window
+        .read_with(cx, |view, _| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let request = loaded.workspace().request(key).unwrap();
+            assert_eq!(
+                request.selected_websocket_message().unwrap().unwrap().data,
+                expected.as_ref()
+            );
+        })
+        .unwrap();
+}

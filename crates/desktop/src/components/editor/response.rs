@@ -19,12 +19,14 @@ pub(crate) enum BodySyntax {
 
 pub(crate) fn documentation_text_input(
     theme: Theme,
+    retained_state: Option<RetainedEditorState>,
     id: ElementId,
     value: String,
     placeholder: &'static str,
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui_kit::AnyElement {
     ProbeEditor {
+        retained_state,
         theme,
         id,
         value: value.into(),
@@ -56,6 +58,7 @@ pub(crate) fn curl_command_input(
     on_value_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui_kit::AnyElement {
     ProbeEditor {
+        retained_state: None,
         theme,
         id,
         value: value.into(),
@@ -81,6 +84,7 @@ pub(crate) fn curl_command_input(
 
 pub(crate) fn websocket_composer(
     theme: Theme,
+    retained_state: RetainedEditorState,
     id: ElementId,
     value: String,
     enabled: bool,
@@ -88,6 +92,7 @@ pub(crate) fn websocket_composer(
     on_change: impl Fn(SharedString, &mut Window, &mut App) + 'static,
 ) -> gpui_kit::AnyElement {
     ProbeEditor {
+        retained_state: Some(retained_state),
         theme,
         id,
         value: value.into(),
@@ -118,6 +123,7 @@ pub(crate) fn websocket_composer(
 
 pub(crate) fn body_text_input(
     theme: Theme,
+    retained_state: RetainedEditorState,
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
     syntax: BodySyntax,
@@ -133,6 +139,7 @@ pub(crate) fn body_text_input(
         |kind, name| placeholder_tone(&variables, kind, name),
     );
     ProbeEditor {
+        retained_state: Some(retained_state),
         theme,
         id: id.into(),
         value,
@@ -162,6 +169,7 @@ pub(crate) fn body_text_input(
 
 pub(crate) fn response_body_input(
     theme: Theme,
+    retained_state: RetainedEditorState,
     id: impl Into<ElementId>,
     text: SharedString,
     options: ResponseBodyInputOptions,
@@ -234,6 +242,7 @@ pub(crate) fn response_body_input(
 
     response_editor(
         theme,
+        retained_state,
         id,
         ResponseEditorPresentation {
             value: text,
@@ -268,6 +277,7 @@ fn cached_value_at_cursor(
 
 pub(crate) fn response_headers_input(
     theme: Theme,
+    retained_state: RetainedEditorState,
     id: impl Into<ElementId>,
     headers: &[probe_http::ResponseHeader],
     on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
@@ -283,6 +293,7 @@ pub(crate) fn response_headers_input(
     }
     response_editor(
         theme,
+        retained_state,
         id,
         ResponseEditorPresentation {
             value: joined.text.into(),
@@ -300,12 +311,14 @@ pub(crate) fn response_headers_input(
 
 pub(crate) fn response_inspector_input(
     theme: Theme,
+    retained_state: RetainedEditorState,
     id: impl Into<ElementId>,
     text: impl Into<SharedString>,
     on_visible_range: impl Fn(Range<usize>, &mut App) + 'static,
 ) -> gpui_kit::AnyElement {
     response_editor(
         theme,
+        retained_state,
         id,
         ResponseEditorPresentation {
             value: text.into(),
@@ -332,6 +345,7 @@ struct ResponseEditorPresentation {
 
 fn response_editor(
     theme: Theme,
+    retained_state: RetainedEditorState,
     id: impl Into<ElementId>,
     presentation: ResponseEditorPresentation,
     on_visible_range: VisibleRangeHandler,
@@ -339,6 +353,7 @@ fn response_editor(
     extra_context_menu_actions: Vec<TextContextMenuExtraAction>,
 ) -> gpui_kit::AnyElement {
     ProbeEditor {
+        retained_state: Some(retained_state),
         theme,
         id: id.into(),
         value: presentation.value,

@@ -279,6 +279,7 @@ impl ProbeApp {
                         .flex_col()
                         .child(components::websocket_composer(
                             theme,
+                            self.request_editor.editor(key, "websocket-composer"),
                             ("websocket-draft", key.slot()).into(),
                             state.map(|s| s.draft.clone()).unwrap_or_default(),
                             connected,

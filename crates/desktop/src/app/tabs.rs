@@ -219,8 +219,16 @@ impl ProbeApp {
         cx.notify();
     }
 
-    fn remove_open_tab(&mut self, tab: crate::shell::OpenTab) {
-        self.shell.close(tab);
+    pub(super) fn remove_open_tab(&mut self, tab: crate::shell::OpenTab) {
+        if let crate::shell::OpenTab::Overview(overview) = tab
+            && let Some(target) = self.overview_target(overview)
+        {
+            self.overview_editors.get_mut().remove(&target);
+        }
+        match tab {
+            crate::shell::OpenTab::Overview(overview) => self.shell.close_overview(overview),
+            crate::shell::OpenTab::Request(_) => self.shell.close(tab),
+        }
         let crate::shell::OpenTab::Request(key) = tab else {
             return;
         };
@@ -754,7 +762,7 @@ impl ProbeApp {
                         .map(crate::shell::OverviewTab::Folder),
                 };
                 if let Some(tab) = tab {
-                    self.shell.close_overview(tab);
+                    self.remove_open_tab(crate::shell::OpenTab::Overview(tab));
                 }
                 self.select_and_reveal_active_request_in_sidebar();
                 self.reveal_active_tab();

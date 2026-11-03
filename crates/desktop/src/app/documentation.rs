@@ -182,7 +182,7 @@ impl ProbeApp {
         if self.pending_overview_targets(&pending).is_empty()
             && self.documentation_save_task.is_none()
         {
-            self.shell.close_overview(tab);
+            self.remove_open_tab(crate::shell::OpenTab::Overview(tab));
             self.select_and_reveal_active_request_in_sidebar();
             self.reveal_active_tab();
             self.persist_session(cx);
