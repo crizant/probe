@@ -328,6 +328,26 @@ impl RequestEditorState {
         self.editors.get_mut().retain(|(owner, _), _| *owner != key);
     }
 
+    pub(crate) fn invalidate_changed_editors(
+        &mut self,
+        key: RequestKey,
+        previous: &Request,
+        current: &Request,
+    ) {
+        if (previous.kind.is_graphql() || current.kind.is_graphql())
+            && previous.kind != current.kind
+        {
+            for slot in ["graphql-query", "graphql-variables", "graphql-extensions"] {
+                self.editors.get_mut().remove(&(key, slot));
+            }
+        }
+        if (previous.kind.is_websocket() || current.kind.is_websocket())
+            && previous.kind != current.kind
+        {
+            self.editors.get_mut().remove(&(key, "websocket-message"));
+        }
+    }
+
     pub(crate) fn scroll(&self, key: RequestKey, section: EditorSection) -> gpui_kit::ScrollHandle {
         self.scrolls
             .borrow_mut()

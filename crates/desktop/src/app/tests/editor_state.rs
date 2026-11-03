@@ -126,7 +126,33 @@ fn request_editors_keep_sessions_across_sections_and_requests(cx: &mut TestAppCo
         ),
     ] {
         let editor = select_editor(window, key, section, slot, cx);
-        editor.update(cx, |editor, cx| editor.set_selected_range(0..6, cx));
+        // Exercise shared editor behavior once; other rows check their wiring.
+        let http_body = key == http && section == EditorSection::Body;
+        let original = editor.read_with(cx, |editor, _| editor.value());
+        if http_body {
+            cx.simulate_input(window.into(), "edited");
+            cx.simulate_keystrokes(window.into(), find_shortcut());
+            cx.simulate_input(window.into(), "needle");
+            cx.run_until_parked();
+            editor.update(cx, |editor, cx| editor.next_search_match(cx));
+        }
+        let selection = if http_body { 110..116 } else { 0..6 };
+        editor.update(cx, |editor, cx| {
+            editor.set_selected_range(selection.clone(), cx)
+        });
+        cx.run_until_parked();
+        if http_body {
+            editor.update(cx, |editor, cx| {
+                editor.set_scroll_offset(point(px(0.0), px(-100.0)), cx)
+            });
+            cx.run_until_parked();
+        }
+        let (offset, match_index) = editor.read_with(cx, |editor, _| {
+            (
+                editor.scroll_offset(),
+                editor.search_session().matcher.current_match_index(),
+            )
+        });
         // Unmount the section, then leave the request. Each editor must retain
         // its session through both transitions; restore it only once.
         window
@@ -145,9 +171,33 @@ fn request_editors_keep_sessions_across_sections_and_requests(cx: &mut TestAppCo
         assert_eq!(select_editor(window, key, section, slot, cx), editor);
         assert_eq!(
             editor.read_with(cx, |state, _| state.selected_range()),
-            0..6,
+            selection,
             "{slot}"
         );
+        if http_body {
+            cx.run_until_parked();
+            editor.read_with(cx, |editor, _| {
+                assert!(offset.y < px(0.0));
+                assert!(match_index > 0);
+                assert_eq!(editor.scroll_offset(), offset);
+                assert!(editor.search_session().is_active());
+                assert_eq!(editor.search_session().query, "needle");
+                assert_eq!(
+                    editor.search_session().matcher.current_match_index(),
+                    match_index
+                );
+            });
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            assert!(visual.debug_bounds("editor-search-card").is_some());
+            cx.simulate_keystrokes(window.into(), "escape");
+            window
+                .update(cx, |_, window, cx| {
+                    window.dispatch_action(Box::new(gpui_kit::base::input::Undo), cx);
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(editor.read_with(cx, |editor, _| editor.value()), original);
+        }
     }
     let editor = select_editor(window, http, EditorSection::Body, "body-text", cx);
     let weak = editor.downgrade();
@@ -215,6 +265,10 @@ fn overview_editor_keeps_session_until_closed(cx: &mut TestAppContext) {
 fn graphql_reload_keeps_unchanged_sessions_but_resets_changed_operations(cx: &mut TestAppContext) {
     let (window, [_, key, _]) = editor_workspace(cx);
     let fixture = bundled_fixture();
+    let docs = select_editor(window, key, EditorSection::Docs, "request-description", cx);
+    cx.simulate_input(window.into(), "documentation");
+    cx.run_until_parked();
+    let docs_selection = docs.read_with(cx, |editor, _| editor.selected_range());
     let mut editors = Vec::new();
     for (section, slot) in [
         (EditorSection::GraphqlQuery, "graphql-query"),
@@ -245,16 +299,15 @@ fn graphql_reload_keeps_unchanged_sessions_but_resets_changed_operations(cx: &mu
             .update(cx, |view, _, cx| {
                 let mut fresh = probe_opencollection::load_workspace(&fixture).unwrap();
                 let current = view.loaded_workspace.as_ref().unwrap();
-                let mut kind = current
+                let mut request = current
                     .workspace()
                     .request(current.requests()[1].key())
                     .unwrap()
-                    .kind
                     .clone();
                 if changed
                     && let RequestKind::Graphql {
                         body: Some(GraphqlBody::Variants(variants)),
-                    } = &mut kind
+                    } = &mut request.kind
                 {
                     // The new operation has identical text and a duplicate title.
                     if change == 1 {
@@ -266,11 +319,19 @@ fn graphql_reload_keeps_unchanged_sessions_but_resets_changed_operations(cx: &mu
                     }
                 }
                 let key = fresh.requests()[1].key();
-                fresh.request_mut(key).unwrap().kind = kind;
+                *fresh.request_mut(key).unwrap() = request;
                 view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
                 key
             })
             .unwrap();
+        assert_eq!(
+            select_editor(window, key, EditorSection::Docs, "request-description", cx),
+            docs
+        );
+        assert_eq!(
+            docs.read_with(cx, |editor, _| editor.selected_range()),
+            docs_selection
+        );
         for (section, slot, previous) in &mut editors {
             let restored = select_editor(window, key, *section, slot, cx);
             assert_eq!(restored == *previous, !changed, "{slot}");
@@ -307,4 +368,103 @@ fn graphql_reload_keeps_unchanged_sessions_but_resets_changed_operations(cx: &mu
             }
         }
     }
+}
+
+#[gpui_kit::test]
+fn websocket_variant_reload_resets_message_undo_but_keeps_docs_and_composer(
+    cx: &mut TestAppContext,
+) {
+    use probe_core::{
+        WebSocketMessage, WebSocketMessageKind, WebSocketMessageSet, WebSocketMessageVariant,
+    };
+    let (window, [key, ..]) = editor_workspace(cx);
+    let section = EditorSection::WebSocketMessage;
+    window
+        .update(cx, |view, _, _| {
+            let message = WebSocketMessage {
+                kind: WebSocketMessageKind::Text,
+                data: "message".into(),
+            };
+            let loaded = view.loaded_workspace.as_mut().unwrap();
+            loaded.request_mut(key).unwrap().kind = RequestKind::WebSocket {
+                message: Some(WebSocketMessageSet::Variants(
+                    [true, false]
+                        .map(|selected| WebSocketMessageVariant {
+                            title: "Same title".into(),
+                            selected,
+                            message: message.clone(),
+                        })
+                        .into(),
+                )),
+            };
+            let (cancel, _) = oneshot::channel();
+            view.websocket.begin(key, cancel);
+            let session = view.websocket.sessions.get_mut(&key).unwrap();
+            session.state = crate::websocket::ConnectionState::Connected;
+            session.draft = "live draft".into();
+        })
+        .unwrap();
+    let docs = select_editor(window, key, EditorSection::Docs, "request-docs", cx);
+    docs.update(cx, |editor, cx| editor.set_selected_range(0..6, cx));
+    let composer = select_editor(window, key, section, "websocket-composer", cx);
+    let message = select_editor(window, key, section, "websocket-message", cx);
+    cx.simulate_input(window.into(), "edited");
+    cx.run_until_parked();
+    let expected = message.read_with(cx, |editor, _| editor.value());
+    let key = window
+        .update(cx, |view, _, cx| {
+            let mut fresh = probe_opencollection::load_workspace(bundled_fixture()).unwrap();
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let mut request = loaded.workspace().request(key).unwrap().clone();
+            let RequestKind::WebSocket {
+                message: Some(WebSocketMessageSet::Variants(variants)),
+            } = &mut request.kind
+            else {
+                panic!("expected configured message variants");
+            };
+            // Switch variants without changing the displayed text or title.
+            variants[1].message = variants[0].message.clone();
+            variants[0].selected = false;
+            variants[1].selected = true;
+            let key = fresh.requests()[0].key();
+            *fresh.request_mut(key).unwrap() = request;
+            view.apply_reconciled_workspace(reconciled_workspace(fresh), cx);
+            key
+        })
+        .unwrap();
+    assert_eq!(
+        select_editor(window, key, EditorSection::Docs, "request-docs", cx),
+        docs
+    );
+    assert_eq!(
+        docs.read_with(cx, |editor, _| editor.selected_range()),
+        0..6
+    );
+    assert_eq!(
+        select_editor(window, key, section, "websocket-composer", cx),
+        composer
+    );
+    assert_eq!(
+        composer.read_with(cx, |editor, _| editor.value()),
+        "live draft"
+    );
+    let restored = select_editor(window, key, section, "websocket-message", cx);
+    assert_ne!(restored, message);
+    window
+        .update(cx, |_, window, cx| {
+            window.dispatch_action(Box::new(gpui_kit::base::input::Undo), cx)
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(restored.read_with(cx, |editor, _| editor.value()), expected);
+    window
+        .read_with(cx, |view, _| {
+            let loaded = view.loaded_workspace.as_ref().unwrap();
+            let request = loaded.workspace().request(key).unwrap();
+            assert_eq!(
+                request.selected_websocket_message().unwrap().unwrap().data,
+                expected.as_ref()
+            );
+        })
+        .unwrap();
 }

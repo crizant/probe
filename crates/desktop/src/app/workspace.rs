@@ -1054,17 +1054,16 @@ impl ProbeApp {
             let new_key = workspace.add_detached_request(request);
             remaps.insert(old_key, new_key);
         }
-        // A changed GraphQL body may select a different operation with identical
-        // displayed text. Drop its drafts and undo history before remapping.
+        // Changed protocol bodies may select a different variant with identical
+        // displayed text. Drop only their editors before remapping.
         for (previous_key, current_key) in &remaps {
             if let Some((previous, current)) = old
                 .workspace()
                 .request(*previous_key)
                 .zip(workspace.workspace().request(*current_key))
-                && (previous.kind.is_graphql() || current.kind.is_graphql())
-                && previous.kind != current.kind
             {
-                self.request_editor.invalidate_editors(*previous_key);
+                self.request_editor
+                    .invalidate_changed_editors(*previous_key, previous, current);
             }
         }
         self.detached_requests.remap(&remaps);
