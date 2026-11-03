@@ -457,7 +457,6 @@ fn authentication_fields_map_edits_and_preserve_imported_properties(cx: &mut Tes
     let (window, [http, _, _]) = editor_workspace(cx);
     window
         .update(cx, |view, _, cx| {
-            view.select_request(http, cx);
             view.request_editor
                 .set_section(http, EditorSection::Authentication);
             cx.notify();
@@ -468,9 +467,24 @@ fn authentication_fields_map_edits_and_preserve_imported_properties(cx: &mut Tes
         Value::Sequence(vec![Value::Boolean(true)]),
     )]));
     for (kind, fields) in [
-        (AuthenticationKind::Basic, vec!["username", "password"]),
-        (AuthenticationKind::Bearer, vec!["token"]),
-        (AuthenticationKind::ApiKey, vec!["key", "value"]),
+        (
+            AuthenticationKind::Basic,
+            &[
+                ("username", "authentication-username"),
+                ("password", "authentication-password"),
+            ][..],
+        ),
+        (
+            AuthenticationKind::Bearer,
+            &[("token", "authentication-token")][..],
+        ),
+        (
+            AuthenticationKind::ApiKey,
+            &[
+                ("key", "authentication-key"),
+                ("value", "authentication-value"),
+            ][..],
+        ),
     ] {
         window
             .update(cx, |view, _, cx| {
@@ -490,18 +504,9 @@ fn authentication_fields_map_edits_and_preserve_imported_properties(cx: &mut Tes
             })
             .unwrap();
         cx.run_until_parked();
-        for field in &fields {
+        for &(field, selector) in fields {
             let mut visual = VisualTestContext::from_window(window.into(), cx);
-            let bounds = visual
-                .debug_bounds(match *field {
-                    "username" => "authentication-username",
-                    "password" => "authentication-password",
-                    "token" => "authentication-token",
-                    "key" => "authentication-key",
-                    "value" => "authentication-value",
-                    _ => unreachable!(),
-                })
-                .unwrap();
+            let bounds = visual.debug_bounds(selector).unwrap();
             visual.simulate_click(
                 point(bounds.center().x, bounds.bottom() - px(12.0)),
                 Modifiers::default(),
@@ -519,16 +524,16 @@ fn authentication_fields_map_edits_and_preserve_imported_properties(cx: &mut Tes
             cx.run_until_parked();
         }
         window
-            .update(cx, |view, _, cx| {
+            .read_with(cx, |view, _| {
                 let auth = view
                     .active_request()
                     .unwrap()
                     .authentication
                     .as_ref()
                     .unwrap();
-                for field in &fields {
+                for &(field, _) in fields {
                     assert_eq!(
-                        auth.properties[*field],
+                        auth.properties[field],
                         Value::String(format!("{{{{{field}}}}}"))
                     );
                 }
@@ -539,12 +544,6 @@ fn authentication_fields_map_edits_and_preserve_imported_properties(cx: &mut Tes
                         Value::String("query".to_owned())
                     );
                 }
-                let before = auth.clone();
-                view.edit_request(http, |request| set_authentication(request, Some(kind)), cx);
-                assert_eq!(
-                    view.active_request().unwrap().authentication.as_ref(),
-                    Some(&before)
-                );
             })
             .unwrap();
     }

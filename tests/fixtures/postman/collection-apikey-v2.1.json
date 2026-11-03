@@ -1,0 +1,80 @@
+{
+  "info": {
+    "_postman_id": "pm_v21",
+    "name": "Postman Pets",
+    "description": "Pet operations",
+    "version": {
+      "major": 1,
+      "minor": 2,
+      "patch": 3,
+      "identifier": "beta"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "header",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/items",
+        "auth": {
+          "type": "apikey",
+          "apikey": [
+            {
+              "key": "key",
+              "value": "{{key}}",
+              "type": "string"
+            },
+            {
+              "key": "value",
+              "value": "{{token}}",
+              "type": "string"
+            },
+            {
+              "key": "in",
+              "value": "header",
+              "type": "string"
+            },
+            {
+              "key": "custom",
+              "value": "{{custom}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "query",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/items",
+        "auth": {
+          "type": "apikey",
+          "apikey": [
+            {
+              "key": "key",
+              "value": "{{key}}",
+              "type": "string"
+            },
+            {
+              "key": "value",
+              "value": "{{token}}",
+              "type": "string"
+            },
+            {
+              "key": "in",
+              "value": "query",
+              "type": "string"
+            },
+            {
+              "key": "custom",
+              "value": "{{custom}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

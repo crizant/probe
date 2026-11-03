@@ -6,6 +6,11 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Fixed
+
+- Import Postman API Key header and query placement correctly, and report missing,
+  invalid, or conflicting placement settings without defaulting to a header.
+
 ### Changed
 
 - Use dedicated Basic, Bearer, and API Key authentication fields, with a password

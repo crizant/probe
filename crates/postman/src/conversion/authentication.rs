@@ -43,7 +43,10 @@ pub(super) fn convert_authentication(
         }
     }
     let kind = authentication_kind(auth_type);
-    if !matches!(kind, AuthenticationKind::Basic | AuthenticationKind::Bearer) {
+    if !matches!(
+        kind,
+        AuthenticationKind::Basic | AuthenticationKind::Bearer | AuthenticationKind::ApiKey
+    ) {
         diagnostics.push(warning(
             "execution_unsupported",
             "request",
@@ -55,13 +58,53 @@ pub(super) fn convert_authentication(
             ),
         ));
     }
-    let properties = convert_properties(
+    let mut properties = convert_properties(
         format,
         object.get(auth_type).unwrap_or(&Value::Null),
         resource_id,
         diagnostics,
     )?;
+    if kind == AuthenticationKind::ApiKey {
+        normalize_api_key_placement(&mut properties, resource_id, diagnostics);
+    }
     Ok(Some(Authentication { kind, properties }))
+}
+
+fn normalize_api_key_placement(
+    properties: &mut BTreeMap<String, AuthenticationValue>,
+    resource_id: &str,
+    diagnostics: &mut Vec<ImportDiagnostic>,
+) {
+    let source = properties.get("in");
+    let placement = properties.get("placement");
+    if let (Some(source), Some(placement)) = (source, placement)
+        && source != placement
+    {
+        diagnostics.push(warning(
+            "conflicting_api_key_placement",
+            "request",
+            Some(resource_id),
+            Some("auth.apikey.in"),
+            "Postman API Key 'in' conflicts with 'placement'; both properties are preserved and Probe uses 'placement'",
+        ));
+        return;
+    }
+    if !matches!(
+        source.or(placement),
+        Some(AuthenticationValue::String(value)) if matches!(value.as_str(), "header" | "query")
+    ) {
+        diagnostics.push(warning(
+            "invalid_api_key_placement",
+            "request",
+            Some(resource_id),
+            Some("auth.apikey.in"),
+            "Postman API Key placement is missing or unsupported; expected 'header' or 'query'; properties are preserved without a default",
+        ));
+        return;
+    }
+    if let Some(source) = properties.remove("in") {
+        properties.insert("placement".to_owned(), source);
+    }
 }
 
 fn authentication_kind(auth_type: &str) -> AuthenticationKind {
@@ -221,6 +264,77 @@ fn typed_auth_value(
                 &format!("Postman authentication value type '{kind}' is not supported"),
             ));
             auth_value(value, resource_id, diagnostics)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use AuthenticationValue::{Boolean, Null, String as Text};
+
+    #[test]
+    fn api_key_placement_diagnostics_preserve_properties() {
+        let text = |value: &str| Some(Text(value.to_owned()));
+        for (source, placement, code) in [
+            (None, None, "invalid_api_key_placement"),
+            (text("cookie"), None, "invalid_api_key_placement"),
+            (text(""), None, "invalid_api_key_placement"),
+            (Some(Null), None, "invalid_api_key_placement"),
+            (Some(Boolean(true)), None, "invalid_api_key_placement"),
+            (text("{{placement}}"), None, "invalid_api_key_placement"),
+            (
+                text("header"),
+                text("query"),
+                "conflicting_api_key_placement",
+            ),
+            (text("query"), Some(Null), "conflicting_api_key_placement"),
+            (
+                text("cookie"),
+                text("header"),
+                "conflicting_api_key_placement",
+            ),
+            (None, text("invalid"), "invalid_api_key_placement"),
+        ] {
+            let mut properties = BTreeMap::from([
+                ("key".into(), Text("{{key}}".into())),
+                ("value".into(), Text("{{value}}".into())),
+                (
+                    "custom".into(),
+                    AuthenticationValue::Sequence(vec![Boolean(false)]),
+                ),
+            ]);
+            properties.extend(
+                [("in", source), ("placement", placement)]
+                    .into_iter()
+                    .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value))),
+            );
+            let original = properties.clone();
+            let mut diagnostics = Vec::new();
+            normalize_api_key_placement(&mut properties, "request", &mut diagnostics);
+            assert_eq!(properties, original);
+            assert_eq!(diagnostics.len(), 1);
+            assert_eq!(diagnostics[0].code, code);
+            assert_eq!(
+                diagnostics[0].severity,
+                probe_core::ImportDiagnosticSeverity::Warning
+            );
+            assert_eq!(diagnostics[0].resource_id.as_deref(), Some("request"));
+        }
+    }
+
+    #[test]
+    fn api_key_existing_placement_is_normalized_without_warnings() {
+        for source in [None, Some(Text("query".into()))] {
+            let expected = BTreeMap::from([("placement".into(), Text("query".into()))]);
+            let mut properties = expected.clone();
+            if let Some(source) = source {
+                properties.insert("in".into(), source);
+            }
+            let mut diagnostics = Vec::new();
+            normalize_api_key_placement(&mut properties, "request", &mut diagnostics);
+            assert_eq!(properties, expected);
+            assert!(diagnostics.is_empty());
         }
     }
 }

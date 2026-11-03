@@ -1,0 +1,41 @@
+{
+  "info": {
+    "_postman_id": "pm_v2",
+    "name": "Postman V2",
+    "schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "header",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/items",
+        "auth": {
+          "type": "apikey",
+          "apikey": {
+            "key": "{{key}}",
+            "value": "{{token}}",
+            "in": "header",
+            "custom": "{{custom}}"
+          }
+        }
+      }
+    },
+    {
+      "name": "query",
+      "request": {
+        "method": "GET",
+        "url": "https://api.example.com/items",
+        "auth": {
+          "type": "apikey",
+          "apikey": {
+            "key": "{{key}}",
+            "value": "{{token}}",
+            "in": "query",
+            "custom": "{{custom}}"
+          }
+        }
+      }
+    }
+  ]
+}

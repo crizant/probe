@@ -21,6 +21,70 @@ use sha2::{Digest, Sha256};
 const SECRET: &str = "SUPER_SECRET_VALUE_THAT_MUST_NEVER_APPEAR";
 
 #[tokio::test]
+async fn imported_postman_api_keys_execute_in_the_selected_placement() {
+    // The importer covers both placements per format; execute one representative of each here.
+    for (name, index) in [
+        ("collection-apikey-v2.json", 0),
+        ("collection-apikey-v2.1.json", 1),
+    ] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/postman")
+            .join(name);
+        let imported = probe_postman::inspect_postman_source(path)
+            .unwrap()
+            .convert(false)
+            .unwrap();
+        let probe_core::CollectionItem::Request(source) = &imported.collection.items[index] else {
+            panic!("expected request");
+        };
+        let (base, server) = serve_once(http_response("", b"hello"));
+        let mut request = source.clone();
+        request.url = Some(format!("{base}/items"));
+        let overrides = [
+            ("key".to_owned(), "X-API-Key".to_owned()),
+            ("token".to_owned(), "imported-secret".to_owned()),
+        ];
+        let response = prepare_request(
+            &request,
+            &RequestResolution {
+                overrides: &overrides,
+                ..RequestResolution::default()
+            },
+            &NoSecrets,
+        )
+        .unwrap()
+        .into_http()
+        .unwrap()
+        .execute(
+            &HttpEngine::new().unwrap(),
+            ExecutionOptions::default(),
+            None,
+            std::future::pending::<()>(),
+            |_| {},
+        )
+        .await
+        .unwrap()
+        .response;
+        assert_eq!(response.status, 200);
+        let head = String::from_utf8(server.join().unwrap()).unwrap();
+        if index == 0 {
+            assert!(head.starts_with("GET /items HTTP/1.1\r\n"), "{head}");
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains("x-api-key: imported-secret\r\n"),
+                "{head}"
+            );
+        } else {
+            assert!(
+                head.starts_with("GET /items?X-API-Key=imported-secret HTTP/1.1\r\n"),
+                "{head}"
+            );
+            assert!(!head.to_ascii_lowercase().contains("x-api-key:"), "{head}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn api_key_placement_secrets_hide_url_structure_in_both_branches() {
     use probe_core::{Authentication, AuthenticationKind, AuthenticationValue, QueryParameter};
 

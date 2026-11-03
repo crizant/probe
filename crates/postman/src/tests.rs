@@ -5,8 +5,9 @@ use std::{
 };
 
 use probe_core::{
-    AuthenticationKind, Body, CollectionItem, EnvironmentVariable, GraphqlBody, MultipartPartKind,
-    RequestBody, VariableValue, VariableValueSet, VariableValueType, WorkspaceItemRef,
+    AuthenticationKind, AuthenticationValue, Body, CollectionItem, EnvironmentVariable,
+    GraphqlBody, MultipartPartKind, RequestBody, VariableValue, VariableValueSet,
+    VariableValueType, WorkspaceItemRef,
 };
 use probe_opencollection::create_bundled_workspace_from_collection;
 
@@ -138,6 +139,46 @@ fn imports_v2_object_authentication() {
 }
 
 #[test]
+fn imports_api_key_placements_and_round_trips() {
+    use AuthenticationValue::String as Text;
+
+    for name in ["collection-apikey-v2.json", "collection-apikey-v2.1.json"] {
+        let imported = inspect_postman_source(fixture(name))
+            .unwrap()
+            .convert(false)
+            .unwrap();
+        assert!(imported.diagnostics.is_empty());
+        assert!(!imported.partial);
+        let destination = temporary_path("apikey.yml");
+        let loaded =
+            create_bundled_workspace_from_collection(&destination, &imported.collection).unwrap();
+        for (index, placement) in ["header", "query"].iter().enumerate() {
+            let CollectionItem::Request(request) = &imported.collection.items[index] else {
+                panic!("expected request");
+            };
+            let auth = request.authentication.as_ref().unwrap();
+            assert_eq!(auth.kind, AuthenticationKind::ApiKey);
+            assert_eq!(
+                auth.properties,
+                [
+                    ("key", "{{key}}"),
+                    ("value", "{{token}}"),
+                    ("placement", *placement),
+                    ("custom", "{{custom}}")
+                ]
+                .map(|(key, value)| (key.to_owned(), Text(value.to_owned())))
+                .into()
+            );
+            let WorkspaceItemRef::Request(key) = loaded.workspace().root_items()[index] else {
+                panic!("expected request");
+            };
+            assert_eq!(loaded.workspace().request(key).unwrap(), request);
+        }
+        fs::remove_file(destination).unwrap();
+    }
+}
+
+#[test]
 fn imports_all_supported_bodies_and_expands_authentication_inheritance() {
     let preview = inspect_postman_source(fixture("collection-bodies-v2.1.json")).unwrap();
     let imported = preview.convert(false).unwrap();
@@ -250,7 +291,7 @@ fn strict_mode_rejects_lossy_data_and_partial_is_explicit() {
             .any(|item| item.code == "dynamic_variable_unsupported")
     );
     assert!(
-        imported
+        !imported
             .diagnostics
             .iter()
             .any(|item| item.code == "execution_unsupported")
