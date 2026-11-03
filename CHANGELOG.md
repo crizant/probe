@@ -6,6 +6,12 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- Use dedicated Basic, Bearer, and API Key authentication fields, with a password
+  reveal toggle and Header / Query Params placement selector. Preserve imported
+  authentication settings while removing unsupported Inherit from new choices.
+
 ## [2.4.1] - 2026-11-03
 
 ### Fixed

@@ -182,6 +182,7 @@ pub(crate) struct ProbeTextInput {
     pub(in crate::components) autofocus: bool,
     pub(in crate::components) readonly: bool,
     disabled: bool,
+    password: bool,
     persistent_field: Option<Entity<FieldInput>>,
     on_field_focus: Option<FieldFocusHandler>,
     pub(in crate::components) shared_input: Option<Entity<InputState>>,
@@ -201,8 +202,6 @@ impl RenderOnce for ProbeTextInput {
             cx,
             |_, _| TextContextMenuState::default(),
         );
-        let overlay_paints_text = self.variable_overlay
-            && !input_variable_ranges(&self.value, self.highlight_path_variables).is_empty();
         let placeholder = self.placeholder.clone();
         let on_change = self.on_change.clone();
         let on_enter = self.on_enter.clone();
@@ -212,8 +211,9 @@ impl RenderOnce for ProbeTextInput {
             let field = self.persistent_field.clone().unwrap_or_else(|| {
                 window.use_keyed_state(self.id.clone(), cx, |window, cx| {
                     let state = cx.new(|cx| {
-                        let mut state =
-                            InputState::new(window, cx).placeholder(placeholder.clone());
+                        let mut state = InputState::new(window, cx)
+                            .placeholder(placeholder.clone())
+                            .masked(self.password);
                         state.set_editor_style(editor_paint_style(self.theme));
                         state
                     });
@@ -270,6 +270,10 @@ impl RenderOnce for ProbeTextInput {
                 )
             },
         );
+        let masked = state.read(cx).presentation().is_masked();
+        let variable_overlay = self.variable_overlay && !masked;
+        let overlay_paints_text = variable_overlay
+            && !input_variable_ranges(&self.value, self.highlight_path_variables).is_empty();
         let placeholder_changed = applied_placeholder.update(cx, |applied, cx| {
             if applied.0 != state.entity_id() {
                 *applied = (
@@ -381,7 +385,23 @@ impl RenderOnce for ProbeTextInput {
             })
             .when_some(self.leading_icon, |input, icon| input.child(icon))
             .child(Input::new(&state));
-        let input = if self.variable_overlay {
+        let input = input.when(self.password, |input| {
+            let state = state.clone();
+            input.child(super::super::icon_button(
+                theme,
+                text_context_menu_id(&component_id, "reveal-password"),
+                if masked {
+                    "Show password"
+                } else {
+                    "Hide password"
+                },
+                super::super::eye_icon(theme, !masked),
+                move |_, window, cx| {
+                    state.update(cx, |input, cx| input.toggle_masked(window, cx));
+                },
+            ))
+        });
+        let input = if variable_overlay {
             variable_input_overlay(
                 self.theme,
                 state.clone(),
@@ -437,6 +457,7 @@ pub(in crate::components) fn text_input_base(
         autofocus: false,
         readonly: false,
         disabled: false,
+        password: false,
         shared_input: None,
         persistent_field: None,
         on_field_focus: None,
@@ -845,6 +866,11 @@ pub(crate) fn dialog_text_input(
 }
 
 impl ProbeTextInput {
+    pub(crate) fn password(mut self, password: bool) -> Self {
+        self.password = password;
+        self
+    }
+
     pub(crate) fn muted(mut self, muted: bool) -> Self {
         if muted {
             self.theme.colors.text.primary = self.theme.colors.text.muted;

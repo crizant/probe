@@ -632,9 +632,23 @@ pub(crate) fn set_authentication(request: &mut Request, kind: Option<Authenticat
     if request.authentication.as_ref().map(|auth| &auth.kind) == kind.as_ref() {
         return;
     }
-    request.authentication = kind.map(|kind| Authentication {
-        kind,
-        properties: BTreeMap::new(),
+    request.authentication = kind.map(|kind| {
+        let fields: &[(&str, &str)] = match kind {
+            AuthenticationKind::Basic => &[("username", ""), ("password", "")],
+            AuthenticationKind::Bearer => &[("token", "")],
+            AuthenticationKind::ApiKey => &[("key", ""), ("value", ""), ("placement", "header")],
+            _ => &[],
+        };
+        let properties = fields
+            .iter()
+            .map(|(name, value)| {
+                (
+                    (*name).to_owned(),
+                    AuthenticationValue::String((*value).to_owned()),
+                )
+            })
+            .collect();
+        Authentication { kind, properties }
     });
 }
 
@@ -778,18 +792,42 @@ mod tests {
     }
 
     #[test]
-    fn authentication_edits_update_the_request_immediately() {
+    fn authentication_defaults_apply_only_when_switching_types() {
+        use probe_core::AuthenticationValue::String as Text;
+
         let mut request = Request::default();
-        set_authentication(&mut request, Some(AuthenticationKind::Bearer));
-        set_auth_property(&mut request, "token".to_owned(), "secret".to_owned());
-        let authentication = request.authentication.unwrap();
-        assert_eq!(authentication.kind, AuthenticationKind::Bearer);
+        set_authentication(&mut request, Some(AuthenticationKind::ApiKey));
         assert_eq!(
-            authentication.properties.get("token"),
-            Some(&probe_core::AuthenticationValue::String(
-                "secret".to_owned()
-            ))
+            request.authentication.as_ref().unwrap().properties,
+            BTreeMap::from([
+                ("key".to_owned(), Text(String::new())),
+                ("value".to_owned(), Text(String::new())),
+                ("placement".to_owned(), Text("header".to_owned()))
+            ])
         );
+        set_auth_property(&mut request, "placement".to_owned(), "query".to_owned());
+        set_authentication(&mut request, Some(AuthenticationKind::ApiKey));
+        assert_eq!(
+            request.authentication.as_ref().unwrap().properties["placement"],
+            Text("query".to_owned())
+        );
+        set_authentication(&mut request, Some(AuthenticationKind::Basic));
+        assert_eq!(
+            request.authentication.as_ref().unwrap().properties,
+            BTreeMap::from([
+                ("username".to_owned(), Text(String::new())),
+                ("password".to_owned(), Text(String::new()))
+            ])
+        );
+        set_authentication(&mut request, None);
+        assert!(request.authentication.is_none());
+        // Existing configurations without placement must not acquire a default.
+        request.authentication = Some(probe_core::Authentication {
+            kind: AuthenticationKind::ApiKey,
+            properties: BTreeMap::new(),
+        });
+        set_authentication(&mut request, Some(AuthenticationKind::ApiKey));
+        assert!(request.authentication.unwrap().properties.is_empty());
     }
 
     #[test]

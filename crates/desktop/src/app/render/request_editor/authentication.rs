@@ -15,7 +15,6 @@ impl ProbeApp {
             .map(|auth| auth_label(&auth.kind));
         let choices = [
             ("None", None),
-            ("Inherit", Some(AuthenticationKind::Inherit)),
             ("Basic", Some(AuthenticationKind::Basic)),
             ("Bearer", Some(AuthenticationKind::Bearer)),
             ("API Key", Some(AuthenticationKind::ApiKey)),
@@ -46,130 +45,109 @@ impl ProbeApp {
             .gap(px(theme.metrics.spacing_2))
             .child(kind_buttons);
         if let Some(authentication) = &request.authentication {
-            for (index, (property_name, value)) in authentication.properties.iter().enumerate() {
-                let old_name = property_name.clone();
-                let name_view = cx.weak_entity();
-                let value_name = property_name.clone();
+            let fields: &[(&str, &str)] = match authentication.kind {
+                AuthenticationKind::Basic => &[("username", "Username"), ("password", "Password")],
+                AuthenticationKind::Bearer => &[("token", "Token")],
+                AuthenticationKind::ApiKey => &[("key", "Key"), ("value", "Value")],
+                _ => &[],
+            };
+            for &(property, label) in fields {
                 let value_view = cx.weak_entity();
-                let remove_name = property_name.clone();
-                let remove_view = cx.weak_entity();
+                let value = authentication
+                    .properties
+                    .get(property)
+                    .map(auth_value)
+                    .unwrap_or_default();
                 editor = editor.child(
-                    components::editor_key_value_row(theme)
+                    div()
+                        .id(property)
+                        .debug_selector(move || format!("authentication-{property}"))
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme.metrics.spacing_1))
+                        .child(label)
                         .child(
-                            div().flex_1().min_w(px(0.0)).child(
-                                components::variable_text_input(
-                                    theme,
-                                    ("authentication-property-name", index),
-                                    property_name.clone(),
-                                    "Property",
-                                    self.variable_context(cx),
-                                    move |value, _, input_cx| {
-                                        let old_name = old_name.clone();
-                                        let _ = name_view.update(input_cx, |view, cx| {
-                                            view.edit_request(
-                                                key,
-                                                |request| {
-                                                    let Some(authentication) =
-                                                        request.authentication.as_mut()
-                                                    else {
-                                                        return;
-                                                    };
-                                                    if let Some(old_value) =
-                                                        authentication.properties.remove(&old_name)
-                                                    {
-                                                        authentication
-                                                            .properties
-                                                            .insert(value.to_string(), old_value);
-                                                    }
-                                                },
-                                                cx,
-                                            );
-                                        });
-                                    },
-                                )
-                                .list_scroll(list_scroll),
-                            ),
-                        )
+                            components::variable_text_input(
+                                theme,
+                                SharedString::from(format!("authentication-{key:?}-{property}")),
+                                value,
+                                label,
+                                self.variable_context(cx),
+                                move |value, _, input_cx| {
+                                    let _ = value_view.update(input_cx, |view, cx| {
+                                        view.edit_request(
+                                            key,
+                                            |request| {
+                                                set_auth_property(
+                                                    request,
+                                                    property.to_owned(),
+                                                    value.to_string(),
+                                                )
+                                            },
+                                            cx,
+                                        );
+                                    });
+                                },
+                            )
+                            .password(property == "password")
+                            .list_scroll(list_scroll),
+                        ),
+                );
+            }
+            if authentication.kind == AuthenticationKind::ApiKey {
+                let placement = authentication.properties.get("placement").map(auth_value);
+                let mut options = vec![
+                    ("header".to_owned(), "Header".to_owned()),
+                    ("query".to_owned(), "Query Params".to_owned()),
+                ];
+                if let Some(value) = &placement
+                    && !matches!(value.as_str(), "header" | "query")
+                {
+                    options.push((value.clone(), value.clone()));
+                }
+                let placement_view = cx.weak_entity();
+                editor = editor.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(theme.metrics.spacing_1))
+                        .child("Add to")
                         .child(
-                            div().flex_1().min_w(px(0.0)).child(
-                                components::variable_text_input(
-                                    theme,
-                                    ("authentication-property-value", index),
-                                    auth_value(value),
-                                    "Value",
-                                    self.variable_context(cx),
-                                    move |value, _, input_cx| {
-                                        let value_name = value_name.clone();
-                                        let _ = value_view.update(input_cx, |view, cx| {
+                            components::dropdown(
+                                theme,
+                                "authentication-placement",
+                                "Add to",
+                                placement,
+                                options,
+                                180.0,
+                                move |placement, _, cx| {
+                                    if let Some(placement) = placement {
+                                        let _ = placement_view.update(cx, |view, cx| {
                                             view.edit_request(
                                                 key,
                                                 |request| {
                                                     set_auth_property(
                                                         request,
-                                                        value_name,
-                                                        value.to_string(),
+                                                        "placement".to_owned(),
+                                                        placement.clone(),
                                                     )
                                                 },
                                                 cx,
                                             );
                                         });
-                                    },
-                                )
-                                .list_scroll(list_scroll),
-                            ),
-                        )
-                        .child(components::remove_row_button(
-                            theme,
-                            ("remove-authentication-property", index),
-                            "Remove authentication property",
-                            move |_, window, cx| {
-                                let remove_name = remove_name.clone();
-                                let _ = remove_view.update(cx, |view, cx| {
-                                    view.edit_request(
-                                        key,
-                                        |request| {
-                                            if let Some(authentication) =
-                                                request.authentication.as_mut()
-                                            {
-                                                authentication.properties.remove(&remove_name);
-                                            }
-                                        },
-                                        cx,
-                                    );
-                                    view.focus_handle.focus(window, cx);
-                                });
-                            },
-                        )),
+                                    }
+                                },
+                            )
+                            .placeholder("Not set"),
+                        ),
                 );
             }
-            let add_view = cx.weak_entity();
-            editor = editor.child(components::editor_add_button(
-                theme,
-                "add-authentication-property",
-                "Add property",
-                move |_, _, cx| {
-                    let _ = add_view.update(cx, |view, cx| {
-                        view.edit_request(
-                            key,
-                            |request| {
-                                let Some(authentication) = request.authentication.as_mut() else {
-                                    return;
-                                };
-                                let mut index = authentication.properties.len() + 1;
-                                let mut name = "property".to_owned();
-                                while authentication.properties.contains_key(&name) {
-                                    name = format!("property{index}");
-                                    index += 1;
-                                }
-                                authentication
-                                    .properties
-                                    .insert(name, AuthenticationValue::String(String::new()));
-                            },
-                            cx,
-                        );
-                    });
-                },
-            ));
+            if fields.is_empty() {
+                editor = editor.child(div().text_color(theme.colors.text.muted).child(format!(
+                    "{} authentication is not supported for execution. Imported configuration is preserved.",
+                    auth_label(&authentication.kind),
+                )));
+            }
         } else {
             editor = editor.child(
                 div()

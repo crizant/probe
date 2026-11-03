@@ -28,10 +28,10 @@ use gpui_kit::{
 #[cfg(target_os = "macos")]
 use gpui_kit::{Menu, MenuItem, OsAction, SystemMenuType};
 use probe_core::{
-    AuthenticationKind, AuthenticationValue, Body, Environment, EnvironmentVariable, FileReference,
-    FormField, Header, ItemKind, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter,
-    RawBodyKind, Request, RequestBody, RequestKey, SecretVariable, Variable, VariableValue,
-    VariableValueSet, WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
+    AuthenticationKind, Body, Environment, EnvironmentVariable, FileReference, FormField, Header,
+    ItemKind, MultipartPart, MultipartPartKind, MultipartValue, QueryParameter, RawBodyKind,
+    Request, RequestBody, RequestKey, SecretVariable, Variable, VariableValue, VariableValueSet,
+    WorkspaceItemRef, add_path_parameter, ensure_path_parameters_from_url,
     remove_path_parameter_at, rename_path_parameter_at, resolve_environment,
 };
 use probe_http::{ExecutionOptions, HttpError, HttpResponse};
