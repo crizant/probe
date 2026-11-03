@@ -448,3 +448,104 @@ fn websocket_variant_reload_resets_message_undo_but_keeps_composer(cx: &mut Test
         })
         .unwrap();
 }
+
+#[gpui_kit::test]
+fn authentication_fields_map_edits_and_preserve_imported_properties(cx: &mut TestAppContext) {
+    use crate::request_editor::set_authentication;
+    use probe_core::{AuthenticationKind, AuthenticationValue as Value};
+
+    let (window, [http, _, _]) = editor_workspace(cx);
+    window
+        .update(cx, |view, _, cx| {
+            view.select_request(http, cx);
+            view.request_editor
+                .set_section(http, EditorSection::Authentication);
+            cx.notify();
+        })
+        .unwrap();
+    let imported = Value::Object(BTreeMap::from([(
+        "nested".to_owned(),
+        Value::Sequence(vec![Value::Boolean(true)]),
+    )]));
+    for (kind, fields) in [
+        (AuthenticationKind::Basic, vec!["username", "password"]),
+        (AuthenticationKind::Bearer, vec!["token"]),
+        (AuthenticationKind::ApiKey, vec!["key", "value"]),
+    ] {
+        window
+            .update(cx, |view, _, cx| {
+                view.edit_request(
+                    http,
+                    |request| {
+                        set_authentication(request, Some(kind.clone()));
+                        request
+                            .authentication
+                            .as_mut()
+                            .unwrap()
+                            .properties
+                            .insert("unsupported".to_owned(), imported.clone());
+                    },
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+        for field in &fields {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let bounds = visual
+                .debug_bounds(match *field {
+                    "username" => "authentication-username",
+                    "password" => "authentication-password",
+                    "token" => "authentication-token",
+                    "key" => "authentication-key",
+                    "value" => "authentication-value",
+                    _ => unreachable!(),
+                })
+                .unwrap();
+            visual.simulate_click(
+                point(bounds.center().x, bounds.bottom() - px(12.0)),
+                Modifiers::default(),
+            );
+            cx.simulate_input(window.into(), &format!("{{{{{field}}}}}"));
+            cx.run_until_parked();
+        }
+        if kind == AuthenticationKind::ApiKey {
+            let mut visual = VisualTestContext::from_window(window.into(), cx);
+            let trigger = visual
+                .debug_bounds("authentication-placement-trigger")
+                .unwrap();
+            visual.simulate_click(trigger.center(), Modifiers::default());
+            cx.simulate_keystrokes(window.into(), "down enter");
+            cx.run_until_parked();
+        }
+        window
+            .update(cx, |view, _, cx| {
+                let auth = view
+                    .active_request()
+                    .unwrap()
+                    .authentication
+                    .as_ref()
+                    .unwrap();
+                for field in &fields {
+                    assert_eq!(
+                        auth.properties[*field],
+                        Value::String(format!("{{{{{field}}}}}"))
+                    );
+                }
+                assert_eq!(auth.properties["unsupported"], imported);
+                if kind == AuthenticationKind::ApiKey {
+                    assert_eq!(
+                        auth.properties["placement"],
+                        Value::String("query".to_owned())
+                    );
+                }
+                let before = auth.clone();
+                view.edit_request(http, |request| set_authentication(request, Some(kind)), cx);
+                assert_eq!(
+                    view.active_request().unwrap().authentication.as_ref(),
+                    Some(&before)
+                );
+            })
+            .unwrap();
+    }
+}
