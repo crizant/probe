@@ -20,7 +20,11 @@ impl ProbeApp {
             ("File", BodyEditorKind::File),
         ];
         let choice_count = choices.len();
-        let mut kind_buttons = div().flex().flex_wrap().gap(px(theme.metrics.spacing_1));
+        let mut kind_buttons = div()
+            .flex_none()
+            .flex()
+            .flex_wrap()
+            .gap(px(theme.metrics.spacing_1));
         for (index, (label, kind)) in choices.into_iter().enumerate() {
             let kind_view = cx.weak_entity();
             kind_buttons = kind_buttons.child(components::editor_subtab(
@@ -118,11 +122,7 @@ impl ProbeApp {
                 );
             }
             None => {
-                editor = editor.child(
-                    div()
-                        .text_color(theme.colors.text.muted)
-                        .child("This request has no body."),
-                );
+                editor = editor.child(placeholder_message(theme, "This request has no body."));
             }
         }
         editor.into_any_element()
