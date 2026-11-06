@@ -205,10 +205,11 @@ impl ProbeApp {
         }
 
         let section_kind = self.request_editor.section(key);
-        let section_scrolls = !matches!(
-            section_kind,
-            EditorSection::Body | EditorSection::Docs | EditorSection::WebSocketMessage
-        ) && !section_kind.is_graphql();
+        let section_scrolls = match section_kind {
+            EditorSection::Body | EditorSection::Docs | EditorSection::WebSocketMessage => false,
+            EditorSection::Authentication => request.authentication.is_some(),
+            _ => !section_kind.is_graphql(),
+        };
         let section_scroll = self.request_editor.scroll(key, section_kind);
         let list_scroll = section_scrolls.then_some(&self.request_list_scroll);
         let section = self.render_request_section(key, &request, theme, list_scroll, cx);

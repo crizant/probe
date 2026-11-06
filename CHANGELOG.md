@@ -6,6 +6,10 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+### Changed
+
+- Center the Body and Authentication empty-state messages below their type selectors.
+
 ## [2.4.2] - 2026-11-04
 
 ### Fixed
