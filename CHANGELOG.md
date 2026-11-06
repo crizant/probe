@@ -6,6 +6,8 @@ Release dates use Australia/Brisbane time (UTC+10).
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-11-06
+
 ### Changed
 
 - Center the Body and Authentication empty-state messages below their type selectors.
@@ -799,6 +801,7 @@ No notable user-facing changes.
 - Manage requests, folders, environments, and variables, and save response bodies to files.
 - Import Postman collections and Yaak workspaces.
 
+[2.4.3]: https://github.com/crizant/probe/releases/tag/v2.4.3
 [2.4.2]: https://github.com/crizant/probe/releases/tag/v2.4.2
 [2.4.1]: https://github.com/crizant/probe/releases/tag/v2.4.1
 [2.4.0]: https://github.com/crizant/probe/releases/tag/v2.4.0
